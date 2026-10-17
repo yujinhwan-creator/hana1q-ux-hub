@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>하나원큐 UX 자산 인벤토리</title>
+<style>
+:root { --bg:#f6f8f8; --surface:#fff; --fg:#16201f; --muted:#5b6b69; --line:#dde5e4; --accent:#00787a; --warn:#8a5a00; color-scheme: light; }
+@media (prefers-color-scheme: dark) { :root { --bg:#0f1514; --surface:#151d1c; --fg:#e4ecea; --muted:#93a5a2; --line:#26322f; --accent:#4cc3c1; --warn:#f0c063; color-scheme: dark; } }
+body { margin:0; min-height:100vh; display:grid; place-items:center; background:var(--bg); color:var(--fg);
+  font:15px/1.6 "Apple SD Gothic Neo","Malgun Gothic",system-ui,sans-serif; padding:0 16px; box-sizing:border-box; }
+form { display:grid; gap:12px; width:min(360px,100%); background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:24px; box-sizing:border-box; }
+.eyebrow { font:12px ui-monospace,Menlo,monospace; letter-spacing:.08em; text-transform:uppercase; color:var(--accent); }
+h1 { font-size:20px; margin:0; line-height:1.35; }
+p { margin:0; font-size:13.5px; color:var(--muted); }
+label { font-size:13px; font-weight:500; }
+input[type=password] { font:inherit; padding:9px 12px; border:1px solid var(--line); border-radius:8px; background:var(--bg); color:var(--fg); }
+.remember { display:flex; gap:8px; align-items:center; font-weight:400; color:var(--muted); cursor:pointer; }
+.remember input { width:16px; height:16px; margin:0; accent-color:var(--accent); }
+button { font:inherit; font-weight:500; padding:9px 12px; border-radius:8px; border:1px solid var(--accent); background:var(--accent); color:var(--surface); cursor:pointer; }
+button:disabled { opacity:.6; }
+input:focus-visible, button:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+.err { color:var(--warn); font-size:13px; min-height:1.4em; }
+</style>
+</head>
+<body>
+<form id="f" autocomplete="off">
+  <div class="eyebrow">Hana 1Q · AI-readable UX</div>
+  <h1>하나원큐 UX 자산 인벤토리</h1>
+  <p>공유받은 비밀번호를 입력하면 페이지가 열립니다. 한 번 열면 이 사이트의 다른 페이지도 바로 열립니다.</p>
+  <label for="pw">비밀번호</label>
+  <input id="pw" type="password" required autofocus>
+  <label class="remember" for="rm"><input id="rm" type="checkbox">이 브라우저에 30일간 저장</label>
+  <button id="go" type="submit">열기</button>
+  <div class="err" id="err" role="alert"></div>
+</form>
+<script>
+const ROOT = "../";            // 이 페이지에서 사이트 루트까지의 상대 경로
+const SALT = "oGRbndpgEWfBos6VjwdZpw==", ITER = 600000;
+const b64 = t => Uint8Array.from(atob(t), c => c.charCodeAt(0));
+const err = document.getElementById("err"), go = document.getElementById("go");
+
+if (!("serviceWorker" in navigator)) {
+  err.textContent = "이 브라우저에서는 열 수 없습니다. 최신 Chrome, Safari, Edge로 열어 주세요.";
+  go.disabled = true;
+}
+const ready = navigator.serviceWorker
+  ? navigator.serviceWorker.register(ROOT + "sw.js", { scope: ROOT }).then(() => navigator.serviceWorker.ready)
+  : Promise.reject();
+
+function ask(sw, msg) {
+  return new Promise(resolve => {
+    navigator.serviceWorker.addEventListener("message", function on(e) {
+      if (e.data && e.data.type === "state") { navigator.serviceWorker.removeEventListener("message", on); resolve(e.data); }
+    });
+    sw.postMessage(msg);
+  });
+}
+
+// 이미 키가 저장돼 있으면 (서비스 워커가 아직 이 탭을 제어하지 않던 첫 방문) 새로고침만 하면 열린다.
+ready.then(async reg => {
+  const st = await ask(reg.active, { type: "ping" });
+  if (st.hasKey && !sessionStorage.getItem("hub-reloaded")) { sessionStorage.setItem("hub-reloaded", "1"); location.reload(); }
+}).catch(() => {});
+
+document.getElementById("f").addEventListener("submit", async e => {
+  e.preventDefault();
+  go.disabled = true; go.textContent = "확인 중…"; err.textContent = "";
+  try {
+    const pw = document.getElementById("pw").value;
+    const base = await crypto.subtle.importKey("raw", new TextEncoder().encode(pw), "PBKDF2", false, ["deriveBits"]);
+    const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", salt: b64(SALT), iterations: ITER, hash: "SHA-256" }, base, 256);
+    const key = await crypto.subtle.importKey("raw", bits, "AES-GCM", false, ["decrypt"]);
+    const chk = new Uint8Array(await (await fetch(ROOT + "check.enc", { cache: "no-cache" })).arrayBuffer());
+    await crypto.subtle.decrypt({ name: "AES-GCM", iv: chk.slice(0, 12) }, key, chk.slice(12));
+    const remember = document.getElementById("rm").checked;
+    const exp = Date.now() + (remember ? 30 * 864e5 : 12 * 36e5);
+    const reg = await ready;
+    await ask(reg.active, { type: "setKey", bytes: bits, exp });
+    sessionStorage.removeItem("hub-reloaded");
+    location.reload();
+  } catch (x) {
+    err.textContent = "비밀번호가 맞지 않습니다. 다시 입력해 주세요.";
+    go.disabled = false; go.textContent = "열기";
+  }
+});
+</script>
+</body>
+</html>
